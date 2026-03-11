@@ -1,7 +1,7 @@
 fastapi
+gunicorn
 uvicorn
 pydantic
-gunicorn
 numpy
 pandas
 sentence-transformers

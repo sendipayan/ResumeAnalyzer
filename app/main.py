@@ -19,10 +19,10 @@ from fastapi.responses import JSONResponse
 from pydantic import AnyHttpUrl, BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
-from services.resume_parser import CVPipeline
-from services.score import RolePredicter
-from services.jdmatch import JDMatch
-from services.jobs import JobRedirectBuilder
+from .services.resume_parser import CVPipeline
+from .services.score import RolePredicter
+from .services.jdmatch import JDMatch
+from .services.jobs import JobRedirectBuilder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
