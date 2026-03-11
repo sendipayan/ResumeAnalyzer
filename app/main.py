@@ -235,7 +235,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def auth_and_rate_limit_middleware(request: Request, call_next):
-    if request.url.path in {"/score", "/jdmatch"}:
+    if request.url.path in {"/score", "/jdmatch", "/ats"}:
         if REQUIRE_API_KEY:
             if not API_KEY:
                 logger.error("REQUIRE_API_KEY is enabled but API_KEY is not set")
@@ -286,6 +286,15 @@ class JDMatchResponse(BaseModel):
     missing_sections: list[str] = Field(default_factory=list, description="Resume sections not found")
 
 
+class ATSResponse(BaseModel):
+    text: str
+    ATS_score: float
+    section_score: float
+    contact_score: float
+    formating_score: float
+    issues: list[str] = Field(default_factory=list)
+
+
 @app.get("/health")
 def health_check() -> dict:
     model_loaded = True
@@ -327,6 +336,7 @@ def root() -> dict:
             "/health": "Health check",
             "/score": "Score resume against roles (POST)",
             "/jdmatch": "Score resume against a frontend-provided JD (POST)",
+            "/ats": "ATS-friendly score for resume (POST)",
             "/docs": "Swagger UI",
         },
     }
@@ -460,6 +470,26 @@ def score_resume_with_jd(payload: JDMatchRequest) -> JDMatchResponse:
         recommendations=recommendations,
         missing_sections=missing_sections,
     )
+
+
+@app.post("/ats", response_model=ATSResponse)
+def ats_score_resume(payload: ResumeRequest) -> ATSResponse:
+    safe_resume_url = validate_resume_url(payload.resume_url)
+
+    try:
+        result = extractor.ATS_score(
+            pdf_url=safe_resume_url,
+            download_timeout=DOWNLOAD_TIMEOUT_SECONDS,
+            max_pdf_bytes=MAX_PDF_BYTES,
+        )
+    except ValueError as exc:
+        logger.warning("ATS parsing validation failed for URL: %s", payload.resume_url)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("ATS scoring failed for URL: %s", payload.resume_url)
+        raise HTTPException(status_code=400, detail="Failed to compute ATS score") from exc
+
+    return ATSResponse(**to_builtin(result))
 
 
 if __name__ == "__main__":
