@@ -11,18 +11,10 @@ from threading import Lock
 from typing import Any
 from urllib.parse import urlparse
 
-import numpy as np
-import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AnyHttpUrl, BaseModel, Field
-from sentence_transformers import SentenceTransformer
-
-from app.services.resume_parser import CVPipeline
-from app.services.score import RolePredicter
-from app.services.jdmatch import JDMatch
-from app.services.jobs import JobRedirectBuilder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,18 +54,43 @@ if MAX_PDF_MB <= 0:
 
 _request_log: dict[str, deque[float]] = defaultdict(deque)
 _request_log_lock = Lock()
-extractor = CVPipeline()
+
+
+@lru_cache(maxsize=1)
+def _np():
+    import numpy as np
+    return np
+
+
+@lru_cache(maxsize=1)
+def _pd():
+    import pandas as pd
+    return pd
+
+
+@lru_cache(maxsize=1)
+def _sentence_transformer_cls():
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer
+
+
+@lru_cache(maxsize=1)
+def get_extractor():
+    from app.services.resume_parser import CVPipeline
+    return CVPipeline()
 
 
 
 @lru_cache(maxsize=1)
-def get_model() -> SentenceTransformer:
+def get_model() -> Any:
+    SentenceTransformer = _sentence_transformer_cls()
     logger.info("Loading SentenceTransformer model: %s", MODEL_NAME)
     return SentenceTransformer(MODEL_NAME, cache_folder=str(MODEL_CACHE_DIR))
 
 
 @lru_cache(maxsize=1)
-def get_job_df() -> pd.DataFrame:
+def get_job_df() -> Any:
+    pd = _pd()
     if not JOB_DATA_PATH.exists():
         raise FileNotFoundError(f"Job dataset not found at: {JOB_DATA_PATH}")
 
@@ -127,6 +144,7 @@ def to_builtin(value):
         return [to_builtin(v) for v in value]
     if isinstance(value, tuple):
         return [to_builtin(v) for v in value]
+    np = _np()
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, np.generic):
@@ -344,6 +362,9 @@ def root() -> dict:
 
 @app.post("/score", response_model=ScoreResponse)
 def score_resume(payload: ResumeRequest) -> ScoreResponse:
+    from app.services.score import RolePredicter
+    from app.services.jobs import JobRedirectBuilder
+
     safe_resume_url = validate_resume_url(payload.resume_url)
     job_links=[]
     try:
@@ -359,7 +380,7 @@ def score_resume(payload: ResumeRequest) -> ScoreResponse:
         raise HTTPException(status_code=503, detail="Dataset not available") from exc
 
     try:
-        resume = extractor.run(
+        resume = get_extractor().run(
             pdf_url=safe_resume_url,
             download_timeout=DOWNLOAD_TIMEOUT_SECONDS,
             max_pdf_bytes=MAX_PDF_BYTES,
@@ -419,6 +440,8 @@ def score_resume(payload: ResumeRequest) -> ScoreResponse:
 
 @app.post("/jdmatch", response_model=JDMatchResponse)
 def score_resume_with_jd(payload: JDMatchRequest) -> JDMatchResponse:
+    from app.services.jdmatch import JDMatch
+
     safe_resume_url = validate_resume_url(payload.resume_url)
 
     try:
@@ -428,7 +451,7 @@ def score_resume_with_jd(payload: JDMatchRequest) -> JDMatchResponse:
         raise HTTPException(status_code=503, detail="Model not available") from exc
 
     try:
-        resume = extractor.run(
+        resume = get_extractor().run(
             pdf_url=safe_resume_url,
             download_timeout=DOWNLOAD_TIMEOUT_SECONDS,
             max_pdf_bytes=MAX_PDF_BYTES,
@@ -477,7 +500,7 @@ def ats_score_resume(payload: ResumeRequest) -> ATSResponse:
     safe_resume_url = validate_resume_url(payload.resume_url)
 
     try:
-        result = extractor.ATS_score(
+        result = get_extractor().ATS_score(
             pdf_url=safe_resume_url,
             download_timeout=DOWNLOAD_TIMEOUT_SECONDS,
             max_pdf_bytes=MAX_PDF_BYTES,
