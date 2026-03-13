@@ -10,16 +10,20 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 from urllib.parse import urlparse
-
+import pickle
+import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AnyHttpUrl, BaseModel, Field
+from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+PICKLE_PATH= BASE_DIR/ "dataset" / "job_embeddings.pkl"
 JOB_DATA_PATH = BASE_DIR / "dataset" / "job_data.csv"
 MODEL_NAME = "all-MiniLM-L6-v2"
 MODEL_CACHE_DIR = BASE_DIR / ".model_cache"
@@ -37,6 +41,8 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "10"))
 REQUIRE_API_KEY = os.getenv("REQUIRE_API_KEY", "false").strip().lower() == "true"
 API_KEY = os.getenv("API_KEY")
+EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL", "").strip()
+EMBEDDING_TIMEOUT_SECONDS = int(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "30"))
 RESUME_DOMAIN_ALLOWLIST = [
     domain.strip().lower()
     for domain in os.getenv("RESUME_DOMAIN_ALLOWLIST", "").split(",")
@@ -68,24 +74,48 @@ def _pd():
     return pd
 
 
-@lru_cache(maxsize=1)
-def _sentence_transformer_cls():
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer
+class RemoteEmbedder:
+    def __init__(self, endpoint_url: str, timeout_seconds: int = 30):
+        if not endpoint_url:
+            raise ValueError("EMBEDDING_API_URL is not configured")
+        self.endpoint_url = endpoint_url
+        self.timeout_seconds = timeout_seconds
+
+    def encode(self, texts):
+        if isinstance(texts, str):
+            payload = [texts]
+            single = True
+        else:
+            payload = ["" if t is None else str(t) for t in (texts or [])]
+            single = False
+
+        if not payload:
+            return [] if not single else []
+
+        response = requests.post(
+            self.endpoint_url,
+            json=payload,
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data[0] if single else data
 
 
 @lru_cache(maxsize=1)
 def get_extractor():
-    from app.services.resume_parser import CVPipeline
+    try:
+        from app.services.resume_parser import CVPipeline
+    except ModuleNotFoundError:
+        from services.resume_parser import CVPipeline
     return CVPipeline()
 
 
 
 @lru_cache(maxsize=1)
 def get_model() -> Any:
-    SentenceTransformer = _sentence_transformer_cls()
-    logger.info("Loading SentenceTransformer model: %s", MODEL_NAME)
-    return SentenceTransformer(MODEL_NAME, cache_folder=str(MODEL_CACHE_DIR))
+    logger.info("Using remote embedding API: %s", EMBEDDING_API_URL or "not configured")
+    return RemoteEmbedder(EMBEDDING_API_URL, timeout_seconds=EMBEDDING_TIMEOUT_SECONDS)
 
 
 @lru_cache(maxsize=1)
@@ -93,8 +123,6 @@ def get_job_df() -> Any:
     pd = _pd()
     if not JOB_DATA_PATH.exists():
         raise FileNotFoundError(f"Job dataset not found at: {JOB_DATA_PATH}")
-
-
 
     data = pd.read_csv(JOB_DATA_PATH)
 
@@ -135,6 +163,14 @@ def get_job_df() -> Any:
             data[col] = data[col].apply(parse_list_column)
 
     return data
+
+def get_pickle()->Any:
+    if not PICKLE_PATH.exists():
+        raise FileNotFoundError(f"Pickle not found at: {PICKLE_PATH}")
+    with open(PICKLE_PATH, "rb") as f:
+      store = pickle.load(f)
+
+    return store
 
 
 def to_builtin(value):
@@ -317,13 +353,33 @@ class ATSResponse(BaseModel):
 def health_check() -> dict:
     model_loaded = True
     dataset_loaded = True
+    pickle_loaded= True
+    embedding_stats: dict[str, Any] | None = None
     errors: list[str] = []
 
     try:
-        get_model()
+        model = get_model()
+        dummy_text = "health-check"
+        start = time.monotonic()
+        embedding = model.encode(dummy_text)
+        elapsed = time.monotonic() - start
+        if isinstance(embedding, (list, tuple)):
+            emb_len = len(embedding)
+            emb_sample = list(embedding[:3])
+        else:
+            emb_len = None
+            emb_sample = None
+        embedding_stats = {
+            "dummy_text": dummy_text,
+            "duration_seconds": round(elapsed, 4),
+            "embedding_length": emb_len,
+            "embedding_sample": emb_sample,
+        }
     except Exception as exc:
         model_loaded = False
         errors.append(f"model_error: {exc}")
+
+
 
     try:
         get_job_df()
@@ -331,12 +387,20 @@ def health_check() -> dict:
         dataset_loaded = False
         errors.append(f"dataset_error: {exc}")
 
-    status = "healthy" if model_loaded and dataset_loaded else "degraded"
+    try:
+        get_pickle()
+    except Exception as exc:
+        pickle_loaded = False
+        errors.append(f"pickle_error: {exc}")
+
+    status = "healthy" if model_loaded and dataset_loaded and pickle_loaded else "degraded"
     return {
         "status": status,
         "model": MODEL_NAME,
         "model_loaded": model_loaded,
         "job_data_loaded": dataset_loaded,
+        "Embeddings_loaded": pickle_loaded,
+        "embedding_stats": embedding_stats,
         "api_key_required": REQUIRE_API_KEY,
         "rate_limit": {
             "window_seconds": RATE_LIMIT_WINDOW_SECONDS,
@@ -362,8 +426,12 @@ def root() -> dict:
 
 @app.post("/score", response_model=ScoreResponse)
 def score_resume(payload: ResumeRequest) -> ScoreResponse:
-    from app.services.score import RolePredicter
-    from app.services.jobs import JobRedirectBuilder
+    try:
+        from app.services.score import RolePredicter
+        from app.services.jobs import JobRedirectBuilder
+    except ModuleNotFoundError:
+        from services.score import RolePredicter
+        from services.jobs import JobRedirectBuilder
 
     safe_resume_url = validate_resume_url(payload.resume_url)
     job_links=[]
@@ -379,6 +447,12 @@ def score_resume(payload: ResumeRequest) -> ScoreResponse:
         logger.exception("Dataset load failed")
         raise HTTPException(status_code=503, detail="Dataset not available") from exc
 
+    try:
+        store = get_pickle()
+    except Exception as exc:
+        logger.exception("Pickle load failed")
+        raise HTTPException(status_code=503, detail="Embeddings not available") from exc
+    
     try:
         resume = get_extractor().run(
             pdf_url=safe_resume_url,
@@ -399,6 +473,7 @@ def score_resume(payload: ResumeRequest) -> ScoreResponse:
         scorer = RolePredicter(
             resume_skills=resume["skills_list"],
             job_df=job_df,
+            store=store,
             model=model,
             project_text=resume["projects"],
             exp_text=resume["experience"],
@@ -440,7 +515,10 @@ def score_resume(payload: ResumeRequest) -> ScoreResponse:
 
 @app.post("/jdmatch", response_model=JDMatchResponse)
 def score_resume_with_jd(payload: JDMatchRequest) -> JDMatchResponse:
-    from app.services.jdmatch import JDMatch
+    try:
+        from app.services.jdmatch import JDMatch
+    except ModuleNotFoundError:
+        from services.jdmatch import JDMatch
 
     safe_resume_url = validate_resume_url(payload.resume_url)
 
@@ -449,6 +527,12 @@ def score_resume_with_jd(payload: JDMatchRequest) -> JDMatchResponse:
     except Exception as exc:
         logger.exception("Model load failed")
         raise HTTPException(status_code=503, detail="Model not available") from exc
+    
+    try:
+        store = get_pickle()
+    except Exception as exc:
+        logger.exception("Pickle load failed")
+        raise HTTPException(status_code=503, detail="Embeddings not available") from exc
 
     try:
         resume = get_extractor().run(
@@ -469,6 +553,7 @@ def score_resume_with_jd(payload: JDMatchRequest) -> JDMatchResponse:
         jd_matcher = JDMatch(
             resume_skills=resume["skills_list"],
             model=model,
+            store=store,
             project_text=resume["projects"],
             exp_text=resume["experience"],
             achiev_text=resume["achievements"],

@@ -33,3 +33,5 @@ Thumbs.db
 # Model/data caches
 .model_cache/
 .cache/
+
+modal_worker/

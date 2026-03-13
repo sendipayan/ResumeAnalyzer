@@ -7,7 +7,6 @@ import numpy as np
 
 
 
-
 class RolePredicter:
 
 
@@ -179,7 +178,20 @@ class RolePredicter:
     return bullets
 
 
-  
+  def get_skill_embedding(self,skill):
+
+    primary = self.store["primary_skills"]
+    secondary = self.store["secondary_skills"]
+
+    if skill in primary["item_to_index"]:
+        idx = primary["item_to_index"][skill]
+        return primary["embeddings"][idx]
+
+    if skill in secondary["item_to_index"]:
+        idx = secondary["item_to_index"][skill]
+        return secondary["embeddings"][idx]
+
+    return None
   
 
   def extract_project_skills_hybrid(
@@ -197,11 +209,7 @@ class RolePredicter:
 
     skill_scores = {}   # skill -> {score, method}
 
-    # Precompute embeddings
-    skill_embeddings = {
-        skill: self.model.encode(skill)
-        for skill in master_skill_list
-    }
+    
 
     # -----------------------------------
     # DIRECT / FUZZY / SEMANTIC MATCH
@@ -231,7 +239,10 @@ class RolePredicter:
 
             else:
                 # 3️⃣ SEMANTIC MATCH
-                skill_emb = skill_embeddings[skill]
+                skill_emb = self.get_skill_embedding(skill)
+                
+                if skill_emb is None:
+                  continue
 
                 similarities = cosine_similarity(
                     [skill_emb],
@@ -260,14 +271,14 @@ class RolePredicter:
 
     for detected in detected_skills:
 
-        detected_emb = skill_embeddings[detected]
+        detected_emb = self.get_skill_embedding(detected)
 
         for skill in master_skill_list:
 
             if skill in skill_scores:
                 continue
 
-            skill_emb = skill_embeddings[skill]
+            skill_emb = self.get_skill_embedding(skill)
 
             sim = cosine_similarity(
                 [detected_emb],
@@ -308,8 +319,9 @@ class RolePredicter:
     }
 
 
-  def __init__(self,resume_skills,project_text,exp_text,achiev_text,cert_list,model,job_df):
+  def __init__(self,resume_skills,project_text,exp_text,achiev_text,cert_list,model,job_df,store):
     self.job_df=job_df
+    self.store=store
     self.model=model
     self.resume_skills=resume_skills
     self.project_text=project_text
@@ -347,25 +359,6 @@ class RolePredicter:
     """, re.IGNORECASE | re.VERBOSE)
 
     self.TEAM_PATTERN = re.compile(r"\b\d+\s?(-| )?member\b", re.IGNORECASE)
-    self.STRONG_IMPACT_ANCHOR = """
-                        Delivered measurable results. Led initiatives that improved performance,
-                        increased revenue, optimized systems, reduced costs, scaled infrastructure,
-                        built production-grade solutions, and achieved significant outcomes.
-                        """
-
-    self.WEAK_IMPACT_ANCHOR = """
-                    Assisted with tasks. Helped team members. Participated in activities.
-                    Supported ongoing work without direct measurable ownership or impact.
-                    """
-    self.LEADERSHIP_ANCHOR = """
-                    Led, cross-functional teams, owned projects end-to-end, mentored members,
-                    drove strategy, influenced decisions, and delivered organizational impact.
-                    """
-    self.PRESTIGE_ANCHOR = """
-                    national or international recognition, won competitive awards,
-                    ranked among top performers, selected from large applicant pools,
-                    recognized for excellence by reputed institutions.
-                    """
     self.TIER1_ORGS = [
                 "Google", "Microsoft", "Amazon", "Meta", "Apple", "Netflix",
                 "OpenAI", "NVIDIA", "Tesla", "Adobe", "IBM", "Oracle",
@@ -485,10 +478,18 @@ class RolePredicter:
 \b
 """
     self.ach_emb=self.model.encode(self.achiev_text)
-    self.strong_emb = self.model.encode(self.STRONG_IMPACT_ANCHOR)
-    self.weak_emb = self.model.encode(self.WEAK_IMPACT_ANCHOR)
-    self.leadership_emb = self.model.encode(self.LEADERSHIP_ANCHOR)
-    self.prestige_emb = self.model.encode(self.PRESTIGE_ANCHOR)
+    self.strong_emb = self.store["anchors"]["embeddings"][
+        self.store["anchors"]["item_to_index"]["STRONG_IMPACT_ANCHOR"]
+      ]
+    self.weak_emb = self.store["anchors"]["embeddings"][
+        self.store["anchors"]["item_to_index"]["WEAK_IMPACT_ANCHOR"]
+      ]
+    self.leadership_emb = self.store["anchors"]["embeddings"][
+        self.store["anchors"]["item_to_index"]["LEADERSHIP_ANCHOR"]
+      ]
+    self.prestige_emb = self.store["anchors"]["embeddings"][
+        self.store["anchors"]["item_to_index"]["PRESTIGE_ANCHOR"]
+      ]
 
 
   def compute_certificate_score(self, jd_emb):
@@ -731,9 +732,9 @@ class RolePredicter:
       skill_result_primary=self.compare_skill_lists(role_skills=row['PrimarySkills'],threshold=70)
       skill_result_secondry=self.compare_skill_lists(role_skills=row['SecondarySkills'],threshold=70)
       role_name = row["Title"]
-      role_resp = row["Responsibilities"]
-      role_text = role_name + " "+ " ".join(role_resp)
-      jd_embd=self.model.encode(role_text)
+      jd_embd=self.store["job_text"]["embeddings"][
+        self.store["job_text"]["item_to_index"][role_name]
+      ]
       project_result=self.semantic_match_proj(role_embedding=jd_embd)
       all_skills=row['PrimarySkills']+row['SecondarySkills']
       project_skill_result=self.extract_project_skills_hybrid(master_skill_list=all_skills)

@@ -4,8 +4,8 @@ uvicorn
 pydantic
 numpy
 pandas
-sentence-transformers
 scikit-learn
 rapidfuzz
 PyMuPDF
 requests
+python-dotenv

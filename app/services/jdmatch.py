@@ -311,13 +311,13 @@ class JDMatch:
     }
 
 
-  def __init__(self,resume_skills,project_text,exp_text,achiev_text,cert_list,model,prim_skills,secod_skills,j_title,j_resp):
+  def __init__(self,resume_skills,project_text,exp_text,achiev_text,cert_list,model,prim_skills,secod_skills,j_title,j_resp,store):
     self.prim_skills=prim_skills
     self.secod_skills=secod_skills
     self.j_title=j_title
     self.j_resp=j_resp
     self.model=model
-    
+    self.store=store
     if not resume_skills:
       self.resume_skills = []
     elif isinstance(resume_skills, (list, tuple, set)):
@@ -347,7 +347,6 @@ class JDMatch:
       cert_sample["text"]=cert
       cert_sample["embd"]=cert_emb
       self.certificates.append(cert_sample)
-    self.combined_impact_text = self.achiev_text + " " + self.project_text + " " + self.exp_text
     self.ALIAS_MAP = {
       "ml": "machine learning",
       "js": "javascript",
@@ -455,7 +454,7 @@ class JDMatch:
            "edX",
            "Udacity",
            "NPTEL",
-            "Udemy"
+           "Udemy"
     ]
 
     self.CERT_LEVEL_PATTERN = re.compile(
@@ -503,12 +502,18 @@ class JDMatch:
 \b
 """
     self.ach_emb=self.model.encode(self.achiev_text)
-    self.combined_emb=model.encode(self.combined_impact_text)
-    self.strong_emb = self.model.encode(self.STRONG_IMPACT_ANCHOR)
-    self.weak_emb = self.model.encode(self.WEAK_IMPACT_ANCHOR)
-    self.leadership_emb = self.model.encode(self.LEADERSHIP_ANCHOR)
-    self.prestige_emb = self.model.encode(self.PRESTIGE_ANCHOR)
-
+    self.strong_emb = self.store["anchors"]["embeddings"][
+        self.store["anchors"]["item_to_index"]["STRONG_IMPACT_ANCHOR"]
+      ]
+    self.weak_emb = self.store["anchors"]["embeddings"][
+        self.store["anchors"]["item_to_index"]["WEAK_IMPACT_ANCHOR"]
+      ]
+    self.leadership_emb = self.store["anchors"]["embeddings"][
+        self.store["anchors"]["item_to_index"]["LEADERSHIP_ANCHOR"]
+      ]
+    self.prestige_emb = self.store["anchors"]["embeddings"][
+        self.store["anchors"]["item_to_index"]["PRESTIGE_ANCHOR"]
+      ]
 
   def compute_certificate_score(self, jd_emb):
     """
@@ -669,19 +674,19 @@ class JDMatch:
     }
 
 
-    comp_bonus = self.competition_bonus(text=self.combined_impact_text)
+    comp_bonus = self.competition_bonus(text=self.achiev_text)
 
 
 
 
 
     strong_score = cosine_similarity(
-                            [self.combined_emb],
+                            [self.ach_emb],
                             [self.strong_emb]
     )[0][0]
 
     weak_score = cosine_similarity(
-                                    [self.combined_emb],
+                                    [self.ach_emb],
                                     [self.weak_emb]
     )[0][0]
 
@@ -691,30 +696,30 @@ class JDMatch:
 
 
     leadership_score = cosine_similarity(
-                                        [self.combined_emb],
+                                        [self.ach_emb],
                                         [self.leadership_emb]
     )[0][0] * 100
 
-    if self.LEADERSHIP_PATTERN.search(self.combined_impact_text):
+    if self.LEADERSHIP_PATTERN.search(self.achiev_text):
       leadership_score += 25
 
-    if self.TEAM_PATTERN.search(self.combined_impact_text):
+    if self.TEAM_PATTERN.search(self.achiev_text):
       leadership_score += 15
 
     leadership_score = min(leadership_score, 100)
 
 
-    prestige_score = self.compute_prestige_score(achievements_text=self.combined_impact_text)
+    prestige_score = self.compute_prestige_score(achievements_text=self.achiev_text)
 
 
 
 
     quant_bonus = 0
-    if re.search(self.QUANT_REGEX, self.combined_impact_text, re.IGNORECASE | re.VERBOSE):
+    if re.search(self.QUANT_REGEX, self.achiev_text, re.IGNORECASE | re.VERBOSE):
       quant_bonus = 25
 
     relevance_score = cosine_similarity(
-                                        [self.combined_emb],
+                                        [self.ach_emb],
                                         [jd_emb]
     )[0][0] * 100
 
