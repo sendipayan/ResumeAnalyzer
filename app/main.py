@@ -53,6 +53,7 @@ _origins_raw = os.getenv(
     "ALLOWED_ORIGINS", DEFAULT_DEV_ORIGINS if APP_ENV != "production" else ""
 )
 ALLOWED_ORIGINS = [origin.strip() for origin in _origins_raw.split(",") if origin.strip()]
+logger.info("ALLOWED_ORIGINS=%s", ALLOWED_ORIGINS)
 
 if MAX_PDF_MB <= 0:
     MAX_PDF_MB = 5
