@@ -114,7 +114,7 @@ def get_extractor():
 
 @lru_cache(maxsize=1)
 def get_model() -> Any:
-    logger.info("Using remote embedding API: %s", EMBEDDING_API_URL or "not configured")
+    logger.info("Using remote embedding API" or "not configured")
     return RemoteEmbedder(EMBEDDING_API_URL, timeout_seconds=EMBEDDING_TIMEOUT_SECONDS)
 
 
@@ -361,11 +361,11 @@ def health_check() -> dict:
         model = get_model()
         dummy_text = "health-check"
         start = time.monotonic()
-        embedding = model.encode(dummy_text)
+        embedding = model.encode([dummy_text])
         elapsed = time.monotonic() - start
-        if isinstance(embedding, (list, tuple)):
-            emb_len = len(embedding)
-            emb_sample = list(embedding[:3])
+        if isinstance(embedding, (list, tuple)) and embedding:
+            emb_len = len(embedding[0])
+            emb_sample = list(embedding[0][:3])
         else:
             emb_len = None
             emb_sample = None

@@ -326,22 +326,19 @@ class RolePredicter:
     self.resume_skills=resume_skills
     self.project_text=project_text
     self.bullets = self.split_bullets(self.project_text)
-    self.bullet_embeddings = self.model.encode(self.bullets)
     self.normalized_project=self.normalize_text(self.project_text)
-    self.project_embedding=self.model.encode(self.normalized_project)
     self.exp_text=exp_text
     self.normalized_exp=self.normalize_text(self.exp_text)
-    self.exp_embeddings=self.model.encode(self.normalized_exp)
-    
     self.achiev_text=achiev_text
     self.cert_list=cert_list
     self.certificates=[]
-    for cert in self.cert_list:
-      cert_emb=self.model.encode(cert)
-      cert_sample={}
-      cert_sample["text"]=cert
-      cert_sample["embd"]=cert_emb
-      self.certificates.append(cert_sample)
+    if self.cert_list:
+      cert_embeddings = self.model.encode(self.cert_list)
+      for cert, cert_emb in zip(self.cert_list, cert_embeddings):
+        cert_sample={}
+        cert_sample["text"]=cert
+        cert_sample["embd"]=cert_emb
+        self.certificates.append(cert_sample)
     self.ALIAS_MAP = {
       "ml": "machine learning",
       "js": "javascript",
@@ -477,7 +474,17 @@ class RolePredicter:
 )
 \b
 """
-    self.ach_emb=self.model.encode(self.achiev_text)
+    resume_parts = []
+    resume_parts.extend(self.bullets)
+    resume_parts.append(self.normalized_project)
+    resume_parts.append(self.normalized_exp)
+    resume_parts.append(self.achiev_text)
+    embeddings = self.model.encode(resume_parts) if resume_parts else []
+    bullet_count = len(self.bullets)
+    self.bullet_embeddings = embeddings[:bullet_count]
+    self.project_embedding = embeddings[bullet_count] if len(embeddings) > bullet_count else None
+    self.exp_embeddings = embeddings[bullet_count + 1] if len(embeddings) > bullet_count + 1 else None
+    self.ach_emb = embeddings[bullet_count + 2] if len(embeddings) > bullet_count + 2 else None
     self.strong_emb = self.store["anchors"]["embeddings"][
         self.store["anchors"]["item_to_index"]["STRONG_IMPACT_ANCHOR"]
       ]

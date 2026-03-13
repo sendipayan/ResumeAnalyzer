@@ -193,10 +193,11 @@ class JDMatch:
     skill_scores = {}   # skill -> {score, method}
 
     # Precompute embeddings
-    skill_embeddings = {
-        skill: self.model.encode(skill)
-        for skill in master_skill_list
-    }
+    if master_skill_list:
+        skill_emb_list = self.model.encode(list(master_skill_list))
+        skill_embeddings = dict(zip(master_skill_list, skill_emb_list))
+    else:
+        skill_embeddings = {}
     
     bullet_embeddings = self.bullet_embeddings
     has_bullet_embeddings = bullet_embeddings is not None and len(bullet_embeddings) > 0
@@ -327,12 +328,9 @@ class JDMatch:
     
     self.project_text = project_text if isinstance(project_text, str) else ("" if project_text is None else str(project_text))
     self.bullets = self.split_bullets(self.project_text)
-    self.bullet_embeddings = self.model.encode(self.bullets)
     self.normalized_project=self.normalize_text(self.project_text)
-    self.project_embedding=self.model.encode(self.normalized_project)
     self.exp_text = exp_text if isinstance(exp_text, str) else ("" if exp_text is None else str(exp_text))
     self.normalized_exp=self.normalize_text(self.exp_text)
-    self.exp_embeddings=self.model.encode(self.normalized_exp)
     self.achiev_text = achiev_text if isinstance(achiev_text, str) else ("" if achiev_text is None else str(achiev_text))
     if not cert_list:
       self.cert_list = []
@@ -341,12 +339,13 @@ class JDMatch:
     else:
       self.cert_list = [str(cert_list)]
     self.certificates=[]
-    for cert in self.cert_list:
-      cert_emb=self.model.encode(cert)
-      cert_sample={}
-      cert_sample["text"]=cert
-      cert_sample["embd"]=cert_emb
-      self.certificates.append(cert_sample)
+    if self.cert_list:
+      cert_embeddings = self.model.encode(self.cert_list)
+      for cert, cert_emb in zip(self.cert_list, cert_embeddings):
+        cert_sample={}
+        cert_sample["text"]=cert
+        cert_sample["embd"]=cert_emb
+        self.certificates.append(cert_sample)
     self.ALIAS_MAP = {
       "ml": "machine learning",
       "js": "javascript",
@@ -501,7 +500,17 @@ class JDMatch:
 )
 \b
 """
-    self.ach_emb=self.model.encode(self.achiev_text)
+    resume_parts = []
+    resume_parts.extend(self.bullets)
+    resume_parts.append(self.normalized_project)
+    resume_parts.append(self.normalized_exp)
+    resume_parts.append(self.achiev_text)
+    embeddings = self.model.encode(resume_parts) if resume_parts else []
+    bullet_count = len(self.bullets)
+    self.bullet_embeddings = embeddings[:bullet_count]
+    self.project_embedding = embeddings[bullet_count] if len(embeddings) > bullet_count else None
+    self.exp_embeddings = embeddings[bullet_count + 1] if len(embeddings) > bullet_count + 1 else None
+    self.ach_emb = embeddings[bullet_count + 2] if len(embeddings) > bullet_count + 2 else None
     self.strong_emb = self.store["anchors"]["embeddings"][
         self.store["anchors"]["item_to_index"]["STRONG_IMPACT_ANCHOR"]
       ]
@@ -755,7 +764,7 @@ class JDMatch:
       role_name = self.j_title
       role_resp = self.j_resp
       role_text = role_name + " "+ " ".join(role_resp)
-      jd_embd=self.model.encode(role_text)
+      jd_embd=self.model.encode([role_text])[0]
       project_result=self.semantic_match_proj(role_embedding=jd_embd)
       all_skills=self.prim_skills+self.secod_skills
       project_skill_result=self.extract_project_skills_hybrid(master_skill_list=all_skills)
