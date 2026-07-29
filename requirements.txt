@@ -1,11 +1,14 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 fastapi
-gunicorn
 uvicorn
 pydantic
-numpy
+numpy==1.26.4
 pandas
-scikit-learn
 rapidfuzz
 PyMuPDF
 requests
 python-dotenv
+psutil
+sentence-transformers==5.2.2
+torch==2.4.1+cpu
+mangum

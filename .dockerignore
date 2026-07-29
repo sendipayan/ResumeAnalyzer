@@ -1,4 +1,5 @@
-# Python
+# Mirrors .gitignore to ensure Docker only copies files that git tracks
+# (plus any additional Docker-only exclusions)
 __pycache__/
 *.py[cod]
 *.pyo
@@ -31,8 +32,10 @@ Thumbs.db
 *.sqlite3
 
 # Model/data caches
-.model_cache/
+
 .cache/
-test.py
 
 modal_worker/
+test.py
+# Git
+.git/

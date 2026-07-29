@@ -1,9 +1,22 @@
 from rapidfuzz import process, fuzz
 
-from sklearn.metrics.pairwise import cosine_similarity
 import re
 import pandas as pd
 import numpy as np
+
+
+def cosine_similarity(a, b):
+  a_arr = np.array(a, dtype=np.float32)
+  b_arr = np.array(b, dtype=np.float32)
+  if a_arr.ndim == 1:
+    a_arr = a_arr.reshape(1, -1)
+  if b_arr.ndim == 1:
+    b_arr = b_arr.reshape(1, -1)
+  a_norm = np.linalg.norm(a_arr, axis=1, keepdims=True)
+  b_norm = np.linalg.norm(b_arr, axis=1, keepdims=True)
+  a_norm = np.where(a_norm == 0, 1e-12, a_norm)
+  b_norm = np.where(b_norm == 0, 1e-12, b_norm)
+  return (a_arr @ b_arr.T) / (a_norm * b_norm.T)
 
 
 
