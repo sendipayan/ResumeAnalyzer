@@ -30,6 +30,10 @@ jobs:
       - name: Check AWS identity
         run: aws sts get-caller-identity
 
+      - name: Test Hugging Face access
+        run: |
+          curl -I https://huggingface.co
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
