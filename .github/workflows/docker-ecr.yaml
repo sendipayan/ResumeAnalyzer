@@ -43,3 +43,9 @@ jobs:
         run: |
           docker push \
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+      - name: Deploy to Lambda
+        run: |
+          aws lambda update-function-code \
+          --function-name resume-analyzer \
+          --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
+          --publish
