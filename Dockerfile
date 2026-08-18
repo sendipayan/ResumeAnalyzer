@@ -6,8 +6,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
-    HF_HUB_OFFLINE=0 \
-    TRANSFORMERS_OFFLINE=0 \
     MODEL_CACHE_DIR=/app/app/.model_cache
 
 WORKDIR /app
@@ -22,7 +20,11 @@ COPY app ./app
 
 
 # Pre-download the model so cold starts don't need network access
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='/app/app/.model_cache')"
+RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='/app/app/.model_cache')"
+
+# Runtime should use the baked model cache only.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
 
 # Lambda Runtime Interface Client as entrypoint
 ENTRYPOINT ["python", "-m", "awslambdaric"]
