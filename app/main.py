@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import pickle
 import requests
 from fastapi import FastAPI, HTTPException, Request
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AnyHttpUrl, BaseModel, Field
@@ -164,6 +164,20 @@ def _is_over_memory_limit() -> tuple[bool, float | None]:
     except Exception:
         return False, None
     return rss_mb >= MAX_RSS_MB, rss_mb
+
+
+@contextmanager
+def _log_step_time(endpoint: str, step: str):
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        logger.info(
+            "%s step=%s duration_seconds=%.4f",
+            endpoint,
+            step,
+            time.monotonic() - start,
+        )
 
 
 def _get_client_ip(request: Request) -> str:
@@ -618,91 +632,104 @@ def root() -> dict:
 
 @app.post("/score", response_model=ScoreResponse)
 def score_resume(payload: ResumeRequest) -> ScoreResponse:
-    try:
-        from app.services.score import RolePredicter
-        from app.services.jobs import JobRedirectBuilder
-    except ModuleNotFoundError:
-        from services.score import RolePredicter
-        from services.jobs import JobRedirectBuilder
+    with _log_step_time("/score", "total"):
+        with _log_step_time("/score", "import_dependencies"):
+            try:
+                from app.services.score import RolePredicter
+                from app.services.jobs import JobRedirectBuilder
+            except ModuleNotFoundError:
+                from services.score import RolePredicter
+                from services.jobs import JobRedirectBuilder
 
-    safe_resume_url = validate_resume_url(payload.resume_url)
-    job_links=[]
-    try:
-        model = get_model()
-    except Exception as exc:
-        logger.exception("Model load failed")
-        raise HTTPException(status_code=503, detail="Model not available") from exc
+        with _log_step_time("/score", "validate_resume_url"):
+            safe_resume_url = validate_resume_url(payload.resume_url)
 
-    try:
-        job_df = get_job_df()
-    except Exception as exc:
-        logger.exception("Dataset load failed")
-        raise HTTPException(status_code=503, detail="Dataset not available") from exc
+        job_links = []
+        with _log_step_time("/score", "load_model"):
+            try:
+                model = get_model()
+            except Exception as exc:
+                logger.exception("Model load failed")
+                raise HTTPException(status_code=503, detail="Model not available") from exc
 
-    try:
-        store = get_pickle()
-    except Exception as exc:
-        logger.exception("Pickle load failed")
-        raise HTTPException(status_code=503, detail="Embeddings not available") from exc
-    
-    try:
-        resume = get_extractor().run(
-            pdf_url=safe_resume_url,
-            download_timeout=DOWNLOAD_TIMEOUT_SECONDS,
-            max_pdf_bytes=MAX_PDF_BYTES,
-        )
-    except ValueError as exc:
-        logger.warning("Resume parsing validation failed for URL: %s", payload.resume_url)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Resume parsing failed for URL: %s", payload.resume_url)
-        raise HTTPException(status_code=400, detail="Failed to parse resume PDF") from exc
-    
-    missing_sections = _missing_resume_sections(resume)
+        with _log_step_time("/score", "load_dataset"):
+            try:
+                job_df = get_job_df()
+            except Exception as exc:
+                logger.exception("Dataset load failed")
+                raise HTTPException(status_code=503, detail="Dataset not available") from exc
 
-
-    try:
-        scorer = RolePredicter(
-            resume_skills=resume["skills_list"],
-            job_df=job_df,
-            store=store,
-            model=model,
-            project_text=resume["projects"],
-            exp_text=resume["experience"],
-            achiev_text=resume["achievements"],
-            cert_list=resume["certificates"],
-        )
+        with _log_step_time("/score", "load_embeddings"):
+            try:
+                store = get_pickle()
+            except Exception as exc:
+                logger.exception("Pickle load failed")
+                raise HTTPException(status_code=503, detail="Embeddings not available") from exc
         
-        result = scorer.final_score(exp_year=resume["experience_years"])
-    except Exception as exc:
-        logger.exception("Resume scoring failed")
-        raise HTTPException(status_code=500, detail="Failed to score resume") from exc
-    
-    try:
-        for r in result:
-            links={}
-            jobs=JobRedirectBuilder(role=r["Title"],
-                                skills=r["primary_skill"]["matched"],
-                                experience_years=resume["experience_years"])
-            links["title"]=r["Title"]
-            links["links"]=jobs.generate_links()
-            job_links.append(links)
+        with _log_step_time("/score", "parse_resume"):
+            try:
+                resume = get_extractor().run(
+                    pdf_url=safe_resume_url,
+                    download_timeout=DOWNLOAD_TIMEOUT_SECONDS,
+                    max_pdf_bytes=MAX_PDF_BYTES,
+                )
+            except ValueError as exc:
+                logger.warning("Resume parsing validation failed for URL: %s", payload.resume_url)
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                logger.exception("Resume parsing failed for URL: %s", payload.resume_url)
+                raise HTTPException(status_code=400, detail="Failed to parse resume PDF") from exc
         
-    except Exception as exc:
-        logger.exception("Job fetching failed for the resume URL: %s", payload.resume_url)
-        raise HTTPException(status_code=500, detail="Failed to find matching jobs") from exc
+        with _log_step_time("/score", "find_missing_sections"):
+            missing_sections = _missing_resume_sections(resume)
 
-    recommendations = to_builtin(result)
-    for recommendation in recommendations:
-        if "score" in recommendation:
-            recommendation["score"] = min(recommendation["score"], 100)
+        with _log_step_time("/score", "score_resume"):
+            try:
+                scorer = RolePredicter(
+                    resume_skills=resume["skills_list"],
+                    job_df=job_df,
+                    store=store,
+                    model=model,
+                    project_text=resume["projects"],
+                    exp_text=resume["experience"],
+                    achiev_text=resume["achievements"],
+                    cert_list=resume["certificates"],
+                )
+                
+                result = scorer.final_score(exp_year=resume["experience_years"])
+            except Exception as exc:
+                logger.exception("Resume scoring failed")
+                raise HTTPException(status_code=500, detail="Failed to score resume") from exc
+        
+        with _log_step_time("/score", "build_job_links"):
+            try:
+                for r in result:
+                    links = {}
+                    jobs = JobRedirectBuilder(
+                        role=r["Title"],
+                        skills=r["primary_skill"]["matched"],
+                        experience_years=resume["experience_years"],
+                    )
+                    links["title"] = r["Title"]
+                    links["links"] = jobs.generate_links()
+                    job_links.append(links)
+                
+            except Exception as exc:
+                logger.exception("Job fetching failed for the resume URL: %s", payload.resume_url)
+                raise HTTPException(status_code=500, detail="Failed to find matching jobs") from exc
 
-    return ScoreResponse(
-        recommendations=recommendations,
-        jobs=job_links,
-        resume_text=resume,
-        missing_sections=missing_sections,
-    )
+        with _log_step_time("/score", "serialize_response"):
+            recommendations = to_builtin(result)
+            for recommendation in recommendations:
+                if "score" in recommendation:
+                    recommendation["score"] = min(recommendation["score"], 100)
+
+            return ScoreResponse(
+                recommendations=recommendations,
+                jobs=job_links,
+                resume_text=resume,
+                missing_sections=missing_sections,
+            )
 
 
 @app.post("/jdmatch", response_model=JDMatchResponse)
