@@ -5,7 +5,7 @@ Production-ready FastAPI service that parses a resume PDF, extracts sections, an
 ## Features
 - Resume parsing from a public PDF URL with size and network safeguards
 - Section extraction for summary, experience, skills, education, projects, achievements, certificates
-- Role scoring using semantic similarity + skill matching
+- Role scoring using semantic similarity + skills matching
 - JD-specific scoring with custom primary/secondary skills and responsibilities
 - Built-in rate limiting and optional API key auth
 - CORS configuration for frontend integration
