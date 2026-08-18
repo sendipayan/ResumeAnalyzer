@@ -19,8 +19,20 @@ from fastapi.responses import JSONResponse
 from pydantic import AnyHttpUrl, BaseModel, Field
 from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+_log_level = getattr(logging, LOG_LEVEL, logging.INFO)
+_root_logger = logging.getLogger()
+_root_logger.setLevel(_log_level)
+if not _root_logger.handlers:
+    logging.basicConfig(
+        level=_log_level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+else:
+    for _handler in _root_logger.handlers:
+        _handler.setLevel(_log_level)
 logger = logging.getLogger(__name__)
+logger.setLevel(_log_level)
 # Keep logs minimal: app lifecycle + route logs (via uvicorn access logger).
 for _name in (
     
