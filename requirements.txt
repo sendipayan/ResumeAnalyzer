@@ -10,5 +10,6 @@ requests
 python-dotenv
 psutil
 sentence-transformers==5.2.2
+transformers==4.46.3
 torch==2.5.1+cpu
 mangum
