@@ -1,6 +1,7 @@
 import ipaddress
 import asyncio
 import logging
+import math
 import os
 import socket
 import ast
@@ -14,7 +15,6 @@ import pickle
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from contextlib import asynccontextmanager, contextmanager
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AnyHttpUrl, BaseModel, Field
 from dotenv import load_dotenv
@@ -108,12 +108,7 @@ RESUME_DOMAIN_ALLOWLIST = [
     for domain in os.getenv("RESUME_DOMAIN_ALLOWLIST", "").split(",")
     if domain.strip()
 ]
-DEFAULT_DEV_ORIGINS = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
-_origins_raw = os.getenv(
-    "ALLOWED_ORIGINS", DEFAULT_DEV_ORIGINS if APP_ENV != "production" else ""
-)
-ALLOWED_ORIGINS = [origin.strip() for origin in _origins_raw.split(",") if origin.strip()]
-logger.debug("ALLOWED_ORIGINS=%s", ALLOWED_ORIGINS)
+
 
 if MAX_PDF_MB <= 0:
     MAX_PDF_MB = 5
@@ -441,6 +436,7 @@ def validate_resume_url(resume_url: AnyHttpUrl) -> str:
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     logger.info("App starting up")
+    logger.info("App startup complete; serving requests")
     try:
         yield
     finally:
@@ -454,13 +450,7 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 
 
 @app.middleware("http")
@@ -540,10 +530,10 @@ class FeedbackResponse(BaseModel):
 
 
 @app.get("/health")
-def health_check() -> dict:
-    model_loaded = True
-    dataset_loaded = True
-    pickle_loaded= True
+def health_check(deep: bool = False) -> dict:
+    model_loaded: bool | None = None
+    dataset_loaded = JOB_DATA_PATH.exists()
+    pickle_loaded = PICKLE_PATH.exists()
     embedding_stats: dict[str, Any] | None = None
     memory_stats: dict[str, Any] = {
         "max_rss_mb": MAX_RSS_MB,
@@ -559,41 +549,46 @@ def health_check() -> dict:
     }
     errors: list[str] = []
 
-    try:
-        model = get_model()
-        dummy_text = "health-check"
-        start = time.monotonic()
-        embedding = model.encode(dummy_text)
-        elapsed = time.monotonic() - start
-        if isinstance(embedding, (list, tuple)) and embedding:
-            emb_len = len(embedding[0])
-            emb_sample = list(embedding[0][:3])
-        else:
-            emb_len = None
-            emb_sample = None
-        embedding_stats = {
-            "dummy_text": dummy_text,
-            "duration_seconds": round(elapsed, 4),
-            "embedding_length": emb_len,
-            "embedding_sample": emb_sample,
-        }
-    except Exception as exc:
-        model_loaded = False
-        errors.append(f"model_error: {exc}")
+    if not dataset_loaded:
+        errors.append(f"dataset_error: Job dataset not found at: {JOB_DATA_PATH}")
+    if not pickle_loaded:
+        errors.append(f"pickle_error: Pickle not found at: {PICKLE_PATH}")
 
+    if deep:
+        model_loaded = True
+        try:
+            model = get_model()
+            dummy_text = "health-check"
+            start = time.monotonic()
+            embedding = model.encode(dummy_text)
+            elapsed = time.monotonic() - start
+            try:
+                emb_len = len(embedding)
+                emb_sample = to_builtin(embedding[:3])
+            except Exception:
+                emb_len = None
+                emb_sample = None
+            embedding_stats = {
+                "dummy_text": dummy_text,
+                "duration_seconds": round(elapsed, 4),
+                "embedding_length": emb_len,
+                "embedding_sample": emb_sample,
+            }
+        except Exception as exc:
+            model_loaded = False
+            errors.append(f"model_error: {exc}")
 
+        try:
+            get_job_df()
+        except Exception as exc:
+            dataset_loaded = False
+            errors.append(f"dataset_error: {exc}")
 
-    try:
-        get_job_df()
-    except Exception as exc:
-        dataset_loaded = False
-        errors.append(f"dataset_error: {exc}")
-
-    try:
-        get_pickle()
-    except Exception as exc:
-        pickle_loaded = False
-        errors.append(f"pickle_error: {exc}")
+        try:
+            get_pickle()
+        except Exception as exc:
+            pickle_loaded = False
+            errors.append(f"pickle_error: {exc}")
 
     proc = _proc()
     if proc is not None:
@@ -604,9 +599,10 @@ def health_check() -> dict:
     cgroup_mb = _get_cgroup_memory_mb()
     memory_stats["current_cgroup_mb"] = round(cgroup_mb, 2) if cgroup_mb is not None else None
 
-    status = "healthy" if model_loaded and dataset_loaded and pickle_loaded else "degraded"
+    status = "healthy" if dataset_loaded and pickle_loaded and (not deep or model_loaded) else "degraded"
     return {
         "status": status,
+        "deep": deep,
         "model": MODEL_NAME,
         "model_loaded": model_loaded,
         "job_data_loaded": dataset_loaded,
